@@ -42,9 +42,18 @@ def get_github_repo_and_sha(build_number):
     for action in data.get("actions", []):
         if "remoteUrls" in action:
             git_url = action["remoteUrls"][0]
-            git_url = git_url.replace(".git", "").split("github.com/")[1]  # Extract "owner/repo"
+            git_url = git_url.replace(".git", "").split("github.com/")[1]
         if "lastBuiltRevision" in action:
             commit_sha = action["lastBuiltRevision"]["SHA1"]
 
     return git_url, commit_sha
+
+def trigger_rollback():
+    # TODO: fetch latest stable build
+    url = "link_to_latest_stable_build"
+    response = requests.post(url, auth=("jenkins_user", "jenkins_token"))
+    if response.ok:
+        print("Rollback triggered successfully")
+    else:
+        print(f"Rollback failed: {response.status_code} - {response.text}")
 
