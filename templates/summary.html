@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Error Summary - Build #{{ summary.build_number }}</title>
+</head>
+<body>
+    <h1>Error Summary</h1>
+    <p><strong>Build Number:</strong> {{ summary.build_number }}</p>
+    <p><strong>File:</strong> {{ summary.file_path }}:{{ summary.line_number }}</p>
+    <p><strong>Error Type:</strong> {{ summary.error_type }}</p>
+    <p><strong>Message:</strong> {{ summary.error_message }}</p>
+    <hr>
+    <h2>Suggested Fix</h2>
+    <pre>{{ summary.suggested_fix }}</pre>
+    <p><em>Reported at: {{ summary.timestamp }}</em></p>
+</body>
+</html>
