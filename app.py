@@ -5,6 +5,7 @@ import time
 import uuid
 import os
 from dotenv import load_dotenv
+from utils.rag_resolver import GitHubErrorResolver
 from utils.jenkins import get_latest_failed_build, get_github_repo_and_sha, get_full_console_log, trigger_rollback
 from utils.github import get_developers_up_to_commit
 from utils.emailer import send_email
@@ -13,6 +14,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+resolver = GitHubErrorResolver(gemini_api_key=GEMINI_API_KEY)
+
 
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -25,7 +30,13 @@ fixes = {} # TODO: add db instead
 
 FAILED_FILE_PATH = "src/main.py" # TODO: Fetch it from LLM
 
-@app.route("/trigger", methods=["POST"])
+@app.route("/webhook/jenkins", methods=["POST"])
+def jenkins_webhook():
+   
+    return trigger_alert()  # reuse your existing logic
+
+   
+
 def trigger_alert():
     latest_failed_build = get_latest_failed_build()
     if not latest_failed_build:
@@ -52,8 +63,14 @@ def trigger_alert():
     email_status = send_email(emails, FAILED_FILE_PATH, latest_failed_build, fix_id)
     console_log = get_full_console_log(latest_failed_build)
 
+    resolver.process_repository(github_repo)
+    suggested_fix = resolver.resolve_error(console_log)
+
+    # print(suggested_fix)
     # Start 1hr countdown timer to evaluate votes
     Timer(60, evaluate_votes, args=(fix_id,)).start()
+
+
 
     return jsonify({
         "fix_id": fix_id,
@@ -62,7 +79,10 @@ def trigger_alert():
         "developers": developers,
         "email_status": email_status,
         "console_log": console_log,
+        "suggested_fix":suggested_fix,
     })
+
+
 
 
 @app.route("/vote")
@@ -111,27 +131,8 @@ buggy_function()""",
                          summary=summary_data,
                          fix_id=fix_id)
 
-def evaluate_votes(fix_id):
-    if fix_id not in fixes:
-        print(f"[{fix_id}] Fix ID not found.")
-        return
 
-    fix = fixes[fix_id]
-    total = len(fix["developers"])
-    votes = fix["votes"]
-    approvals = sum(1 for v in votes.values() if v == "approve")
-
-    print(f"[{fix_id}] Evaluating votes: {approvals}/{total} approvals")
-
-    if approvals > total / 2:
-        print(f"[{fix_id}] Majority approved. Proceeding with fix (build #{fix['build_number']}).")
-        #TODO: add logic to apply the fix
-    else:
-        print(f"[{fix_id}] ❌ Not enough approval. Rolling back...")
-        trigger_rollback()
-        # TODO: Notify developers via email that rollback was triggered
-
-def evaluate_votes(fix_id):
+def evaluate_votes(fix_id, attempt=0):
     if fix_id not in fixes:
         print(f"[{fix_id}] Fix ID not found.")
         return
@@ -148,9 +149,21 @@ def evaluate_votes(fix_id):
         print(f"[{fix_id}] Majority approved. Proceeding with fix (build #{fix['build_number']}).")
         # TODO: add logic to apply the fix
 
-    elif rejects >= total / 2:  # If majority reject
-        print(f"[{fix_id}] ❌ Majority rejected...Calling LLM again")
-        # TODO: call to LLM
+    elif rejects >= total / 2 and attempt < 3:
+        print(f"[{fix_id}] ❌ Rejected. Asking LLM for new fix (attempt {attempt + 1})")
+
+        # LLM logic
+        github_repo, _ = get_github_repo_and_sha(fix["build_number"])
+        console_log = get_full_console_log(fix["build_number"])
+        new_fix = resolver.resolve_error(console_log)
+
+        # Reset votes
+        fix["votes"] = {}
+        send_email(fix["developers"], fix["file_path"], fix["build_number"], fix_id)
+
+        # Schedule next evaluation
+        Timer(60, evaluate_votes, args=(fix_id, attempt + 1)).start()
+
     else:
         print(f"[{fix_id}] No clear majority. Defaulting to rollback...")
         rollback_success = trigger_rollback()
