@@ -1,6 +1,19 @@
 # Devops-Assistant
 ## To run the flask app:
 * create a .env file with the help of sample env.txt
-* download ngrok and run ngrok.exe http 8080 and use that url when adding jenkins url in github webhook
-* set up github webhook for your github repo by watching this: https://www.youtube.com/watch?v=KxAElkZ1Hs4
-* set up google apps password for emailing part to work
+* do ` pip install -r requirements.txt `
+* run app.py
+* type ngrok http 5000 in cmd and copy the url mentioned
+* at the end of your Jenkinsfile, add: 
+```
+post {
+    failure {
+        script {
+            bat 'curl -X POST https://your-ngrok-url/webhook/jenkins'
+            }
+        }
+    }
+```
+
+* go to jenkins and run the build (failed build)
+* you will then see the results in email

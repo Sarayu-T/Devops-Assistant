@@ -5,14 +5,19 @@ import time
 import uuid
 import os
 from dotenv import load_dotenv
+from utils.rag_resolver import GitHubErrorResolver
 from utils.jenkins import get_latest_failed_build, get_github_repo_and_sha, get_full_console_log, trigger_rollback
-from utils.github import get_developers_up_to_commit
+from utils.github import get_developers_up_to_commit, push_code_to_github
 from utils.emailer import send_email
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 load_dotenv()
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+resolver = GitHubErrorResolver(deepseek_api_key=DEEPSEEK_API_KEY)
+
 
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
@@ -23,9 +28,15 @@ app = Flask(__name__)
 fixes = {} # TODO: add db instead
 
 
-FAILED_FILE_PATH = "src/main.py" # TODO: Fetch it from LLM
+@app.route("/webhook/jenkins", methods=["POST"])
+def jenkins_webhook():
+    #TODO: add security check by posting some secret token
+    return trigger_alert()  # reuse your existing logic
 
-@app.route("/trigger", methods=["POST"])
+   
+def normalize_path(path):
+    return path.replace("\\", "/")
+
 def trigger_alert():
     latest_failed_build = get_latest_failed_build()
     if not latest_failed_build:
@@ -34,35 +45,54 @@ def trigger_alert():
     github_repo, commit_sha = get_github_repo_and_sha(latest_failed_build)
     if not github_repo:
         return jsonify({"error": "Failed to determine GitHub repository."}), 500
-
+    console_log = get_full_console_log(latest_failed_build)
+    resolver.process_repository(github_repo)
+    FAILED_FILE_PATH = normalize_path(resolver.get_failed_path(console_log))
     developers = get_developers_up_to_commit(github_repo, FAILED_FILE_PATH, commit_sha)
     emails = [dev.split("<")[1].strip(" >") for dev in developers if "<" in dev]
-    print(emails)
+    
+    console_log = get_full_console_log(latest_failed_build)
+
+    
+    fix_info = resolver.resolve_error(console_log)
 
 
     fix_id = str(uuid.uuid4())
     fixes[fix_id] = {
-        "developers": emails,
-        "votes": {},
-        "file_path": FAILED_FILE_PATH,
-        "build_number": latest_failed_build,
-        "start_time": time.time()
+    "developers": emails,
+    "votes": {},
+    "file_path": FAILED_FILE_PATH,
+    "build_number": latest_failed_build,
+    "start_time": time.time(),
+    "suggested_fix": fix_info["suggested_fix"],
+    "error_type": fix_info.get("error_type", "UnknownError"),
+    "error_message": fix_info.get("error_message", "No error message"),
+    "line_number": fix_info.get("line_number", "N/A")
     }
 
     email_status = send_email(emails, FAILED_FILE_PATH, latest_failed_build, fix_id)
-    console_log = get_full_console_log(latest_failed_build)
+    
 
+    
+
+    # print(suggested_fix)
     # Start 1hr countdown timer to evaluate votes
     Timer(60, evaluate_votes, args=(fix_id,)).start()
 
+
+
     return jsonify({
         "fix_id": fix_id,
+        "file_path": FAILED_FILE_PATH,
         "build": latest_failed_build,
         "repo": github_repo,
         "developers": developers,
         "email_status": email_status,
         "console_log": console_log,
+        "suggested_fix": fix_info["suggested_fix"]
     })
+
+
 
 
 @app.route("/vote")
@@ -85,53 +115,24 @@ def vote():
 @app.route('/summary')
 def show_summary():
     fix_id = request.args.get('fix_id')
-    
-    # Static summary data - replace with your actual data later
+    fix = fixes[fix_id]
     summary_data = {
-    "error_type": "SyntaxError",
-    "file_path": "src/main.py",
-    "line_number": 42,
-    "error_message": "Missing parenthesis in function call",
-    "suggested_fix": """def buggy_function():
-    try:
-        result = 1 / 0
-        return result
-    except ZeroDivisionError:
-        print("Error: Division by zero is not allowed.")
-        return None
-
-# Call the function
-buggy_function()""",
-    "build_number": 1234,
-    "timestamp": "2023-05-15 14:30:00"
-}
+        "error_type": fix.get("error_type", "UnknownError"),
+        "file_path": fix["file_path"],
+        "line_number": fix.get("line_number", "N/A"),
+        "error_message": fix.get("error_message", "No error message"),
+        "suggested_fix": fix["suggested_fix"],
+        "build_number": fix["build_number"],
+        "timestamp": datetime.fromtimestamp(fix["start_time"]).strftime("%Y-%m-%d %H:%M:%S")
+    }
 
     
     return render_template('summary.html', 
                          summary=summary_data,
                          fix_id=fix_id)
 
-def evaluate_votes(fix_id):
-    if fix_id not in fixes:
-        print(f"[{fix_id}] Fix ID not found.")
-        return
 
-    fix = fixes[fix_id]
-    total = len(fix["developers"])
-    votes = fix["votes"]
-    approvals = sum(1 for v in votes.values() if v == "approve")
-
-    print(f"[{fix_id}] Evaluating votes: {approvals}/{total} approvals")
-
-    if approvals > total / 2:
-        print(f"[{fix_id}] Majority approved. Proceeding with fix (build #{fix['build_number']}).")
-        #TODO: add logic to apply the fix
-    else:
-        print(f"[{fix_id}] ❌ Not enough approval. Rolling back...")
-        trigger_rollback()
-        # TODO: Notify developers via email that rollback was triggered
-
-def evaluate_votes(fix_id):
+def evaluate_votes(fix_id, attempt=0):
     if fix_id not in fixes:
         print(f"[{fix_id}] Fix ID not found.")
         return
@@ -146,11 +147,38 @@ def evaluate_votes(fix_id):
 
     if approvals > total / 2:
         print(f"[{fix_id}] Majority approved. Proceeding with fix (build #{fix['build_number']}).")
-        # TODO: add logic to apply the fix
+        print("-------------------------------SUGGESTED FIX-------------------------\n",fix["suggested_fix"])
+        # Push the approved code to GitHub
+        if 'suggested_fix' in fix:
+            github_repo, _ = get_github_repo_and_sha(fix["build_number"])
+            success = push_code_to_github(
+                repo=github_repo,
+                file_path=fix["file_path"],
+                new_content=fix["suggested_fix"],
+                commit_message=f"Auto-fix for build #{fix['build_number']} (approved by majority)"
+            )
+            if success:
+                print(f"[{fix_id}] ✅ Code successfully pushed to GitHub")
+            else:
+                print(f"[{fix_id}] ❌ Failed to push code to GitHub")
+        else:
+            print(f"[{fix_id}] No suggested fix available to push")
 
-    elif rejects >= total / 2:  # If majority reject
-        print(f"[{fix_id}] ❌ Majority rejected...Calling LLM again")
-        # TODO: call to LLM
+    elif rejects >= total / 2 and attempt < 3:
+        print(f"[{fix_id}] ❌ Rejected. Asking LLM for new fix (attempt {attempt + 1})")
+
+        # LLM logic
+        github_repo, _ = get_github_repo_and_sha(fix["build_number"])
+        console_log = get_full_console_log(fix["build_number"])
+        new_fix = resolver.resolve_error(console_log)
+
+        # Reset votes
+        fix["votes"] = {}
+        send_email(fix["developers"], fix["file_path"], fix["build_number"], fix_id)
+
+        # Schedule next evaluation
+        Timer(60, evaluate_votes, args=(fix_id, attempt + 1)).start()
+
     else:
         print(f"[{fix_id}] No clear majority. Defaulting to rollback...")
         rollback_success = trigger_rollback()

@@ -3,11 +3,12 @@ import os
 from dotenv import load_dotenv
 import jenkins
 import subprocess
+import re
 
 load_dotenv()
 
 JENKINS_URL = os.getenv("JENKINS_URL")
-JOB_NAME = "checkingg"
+JOB_NAME = os.getenv("JOB_NAME")
 JENKINS_USER = os.getenv("JENKINS_USER")
 JENKINS_TOKEN = os.getenv("JENKINS_TOKEN")
 
@@ -60,8 +61,28 @@ def get_full_console_log(build_number):
 
     if response.status_code != 200:
         return f"❌ Error fetching logs: {response.text}"
+    
+    lines = response.text.splitlines()
 
-    return response.text
+    
+    error_keywords = re.compile(
+        r'(FAILURE:|error:|Traceback \(most recent call last\):|Exception|Build failed|command returned exit code [^0])',
+        re.IGNORECASE
+    )
+
+    start_index = None
+    for i, line in enumerate(lines):
+        if error_keywords.search(line):
+            start_index = i
+            break
+
+    if start_index is None:
+        return response.text
+
+    print("----------------------------------ERROR----------------------------------------------")
+    print(lines[start_index:])
+    return "\n".join(lines[start_index:])
+
 
 
 def get_github_repo_and_sha(build_number):
