@@ -210,7 +210,7 @@ class ErrorAnalysisSystem:
 
         prompt = f"""
         You are an expert programmer. Given the following error message and relevant code from a repository,
-        identify the likely cause of the error and suggest a fix showing whole code.
+        identify the likely cause of the error and suggest a fix showing the whole code.
 
         ERROR MESSAGE:
         {error_message}
@@ -218,13 +218,22 @@ class ErrorAnalysisSystem:
         RELEVANT CODE CONTEXT:
         {context_text}
 
-        Please analyze the error and provide:
-        1. The root cause of the error
-        2. A specific fix for the error
-        3. Any additional context or explanation about why this fix works
+        Please analyze the error and provide your response as a **valid JSON object**, with no markdown or formatting. Do NOT wrap the response in triple backticks. The JSON should contain:
 
-        Your solution should be clear, concise, and directly address the error.
+        - "suggested_fix": fixed code in str format (use \\n for line breaks)
+        - "error_type": string
+        - "error_message": string
+        - "line_number": integer or null
+
+        Your response must be **pure JSON only**. Example:
+        {{
+            "suggested_fix": "def example():\\n    return 42",
+            "error_type": "NameError",
+            "error_message": "name 'value' is not defined",
+            "line_number": 17
+        }}
         """
+
 
         headers = {
         "Authorization": f"Bearer {self.api_key}",

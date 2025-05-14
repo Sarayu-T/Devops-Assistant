@@ -12,6 +12,8 @@ from utils.emailer import send_email
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import re
+import json
 
 load_dotenv()
 
@@ -37,6 +39,27 @@ def jenkins_webhook():
 def normalize_path(path):
     return path.replace("\\", "/")
 
+def parse_llm_response(raw_response):
+    if isinstance(raw_response, dict):
+        return raw_response
+
+    # Try to extract JSON inside a ```json ... ``` code block
+    match = re.search(r"```json\s*(\{.*?\})\s*```", raw_response, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError as e:
+            print(f"⚠️ JSON decoding failed: {e}")
+            return None
+    else:
+        print("⚠️ No JSON block found in response.")
+        return None
+def extract_code_blocks(text: str) -> list:
+   
+    match = re.search(r"```(?:[\w+-]*)?\n(.*?)```", text, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
 def trigger_alert():
     latest_failed_build = get_latest_failed_build()
     if not latest_failed_build:
@@ -54,7 +77,12 @@ def trigger_alert():
     console_log = get_full_console_log(latest_failed_build)
 
     
-    fix_info = resolver.resolve_error(console_log)
+    raw_response = resolver.resolve_error(console_log)
+    fix_info = raw_response
+    fix_info = parse_llm_response(raw_response)
+    print("-----------------------------------PARSED FIX INFO-----------------------------------")
+    #print(fix_info)
+    #fix_info["suggested_fix"] = extract_code_blocks(fix_info["suggested_fix"])
 
 
     fix_id = str(uuid.uuid4())
