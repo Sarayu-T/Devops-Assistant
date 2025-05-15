@@ -44,9 +44,13 @@ def parse_llm_response(raw_response):
         return raw_response
 
     # Try to extract JSON inside a ```json ... ``` code block
+    print("-----------------------------------RAW RESPONSE-----------------------------------")
+    print(raw_response)
     match = re.search(r"```json\s*(\{.*?\})\s*```", raw_response, re.DOTALL)
     if match:
         json_str = match.group(1)
+        print("-----------------------------------REMOVING JSON-----------------------------------")
+        print(json_str)
         try:
             return json.loads(json_str)
         except json.JSONDecodeError as e:
@@ -66,6 +70,7 @@ def trigger_alert():
         return jsonify({"error": "No failed builds found."}), 404
     print(latest_failed_build)
     github_repo, commit_sha = get_github_repo_and_sha(latest_failed_build)
+    print(github_repo, commit_sha)
     if not github_repo:
         return jsonify({"error": "Failed to determine GitHub repository."}), 500
     console_log = get_full_console_log(latest_failed_build)
@@ -80,9 +85,10 @@ def trigger_alert():
     raw_response = resolver.resolve_error(console_log)
     fix_info = raw_response
     fix_info = parse_llm_response(raw_response)
-    print("-----------------------------------PARSED FIX INFO-----------------------------------")
     #print(fix_info)
-    #fix_info["suggested_fix"] = extract_code_blocks(fix_info["suggested_fix"])
+    fix_info["suggested_fix"] = extract_code_blocks(fix_info["suggested_fix"])
+    fix_info = json.loads(fix_info["suggested_fix"])
+    print(fix_info)
 
 
     fix_id = str(uuid.uuid4())

@@ -12,6 +12,7 @@ def get_developers_up_to_commit(repo, file_path, commit_sha):
     params = {"path": file_path, "sha": commit_sha, "per_page": 1}  # Fetch last 50 commits up to that SHA
 
     response = requests.get(url, headers=headers, params=params)
+    
     if response.status_code != 200:
         print(f"❌ GitHub API Error: {response.json()}")
         return []

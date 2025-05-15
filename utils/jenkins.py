@@ -88,6 +88,8 @@ def get_full_console_log(build_number):
 def get_github_repo_and_sha(build_number):
     api_url = f"{JENKINS_URL}/job/{JOB_NAME}/{build_number}/api/json"
     response = requests.get(api_url, auth=(JENKINS_USER, JENKINS_TOKEN))
+    print("--------------------------------GITHUB RESPONSE--------------------------------------------")
+    print(response)
     response.raise_for_status()
 
     data = response.json()
